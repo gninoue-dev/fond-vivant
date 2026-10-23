@@ -5,7 +5,7 @@ Gestionnaire de fonds d'écran animés (vidéos) et de photos pour **Linux** et 
 - Lecture **fluide à 60 i/s** : décodage par la carte graphique, cadence calée sur la fréquence réelle de l'écran et interpolation entre les images (mpv).
 - La vidéo **remplit tout l'écran**, quel que soit son format : elle est recadrée sans bandes noires ni déformation (on peut aussi choisir « en entier » ou « étirer »).
 - **Optimiser pour mon écran** : ffmpeg prépare une copie à la taille exacte de l'écran et, si la vidéo est en 24 ou 30 i/s, crée les images manquantes par interpolation de mouvement pour obtenir une vraie vidéo à 60 i/s.
-- **Diaporama** : tes photos (et vidéos) changent toutes seules, toutes les 30 secondes à 1 jour, dans l'ordre ou au hasard, avec un bouton « Image suivante ».
+- **Diaporama** : tes photos (et vidéos) changent toutes seules, toutes les 15 secondes à 1 jour, dans l'ordre ou au hasard, avec un bouton « Image suivante ».
 - Interface simple : on choisit « Un seul fond » ou « Diaporama », puis un clic sur une image suffit. Les réglages techniques sont rangés dans « Plus d'options ».
 - Ajout de fichiers ou d'un dossier entier, glisser-déposer, son et volume, pause, plusieurs écrans, démarrage avec l'ordinateur.
 - Les clics traversent le fond : les icônes et le menu du bureau restent utilisables.
