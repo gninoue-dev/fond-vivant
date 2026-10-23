@@ -235,6 +235,71 @@ static void poser_atomes(Display *dpy, Window w, const char *propriete, const ch
                     (unsigned char *)valeurs, n);
 }
 
+static int est_bureau_etranger(Display *dpy, Window w)
+{
+    /* une autre fenêtre de bureau : celle des icônes (Desktop Icons de GNOME, Nautilus…) */
+    Atom type_reel, *types = NULL;
+    int format, resultat = 0;
+    unsigned long n, reste;
+    XClassHint classe;
+    if (XGetClassHint(dpy, w, &classe)) {
+        int a_nous = classe.res_name && strcmp(classe.res_name, "fond-vivant") == 0;
+        XFree(classe.res_name);
+        XFree(classe.res_class);
+        if (a_nous)
+            return 0;
+    }
+    if (XGetWindowProperty(dpy, w, XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False), 0, 8, False, XA_ATOM,
+                           &type_reel, &format, &n, &reste, (unsigned char **)&types) == Success && types) {
+        Atom bureau = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DESKTOP", False);
+        for (unsigned long i = 0; i < n; i++)
+            resultat |= types[i] == bureau;
+        XFree(types);
+    }
+    return resultat;
+}
+
+static Time heure_serveur(Display *dpy, Window w)
+{
+    /* l'heure du serveur X : on touche une propriété et on lit l'heure de l'événement */
+    XEvent ev;
+    XSelectInput(dpy, w, PropertyChangeMask);
+    XChangeProperty(dpy, w, XInternAtom(dpy, "_FOND_VIVANT_HEURE", False), XA_STRING, 8, PropModeReplace,
+                    (unsigned char *)"", 0);
+    XWindowEvent(dpy, w, PropertyChangeMask, &ev);
+    XSelectInput(dpy, w, NoEventMask);
+    return ev.xproperty.time;
+}
+
+static void passer_sous_les_icones(Display *dpy, Window w, Time heure)
+{
+    /* _NET_CLIENT_LIST_STACKING va du bas vers le haut */
+    Atom type_reel;
+    int format;
+    unsigned long n, reste;
+    Window *pile = NULL;
+    if (XGetWindowProperty(dpy, DefaultRootWindow(dpy), XInternAtom(dpy, "_NET_CLIENT_LIST_STACKING", False), 0,
+                           4096, False, XA_WINDOW, &type_reel, &format, &n, &reste, (unsigned char **)&pile)
+            != Success || !pile)
+        return;
+    int au_dessus_des_icones = 0;
+    for (unsigned long i = 0; i < n && pile[i] != w; i++)
+        au_dessus_des_icones |= est_bureau_etranger(dpy, pile[i]);
+    XFree(pile);
+    if (!au_dessus_des_icones)
+        return;
+
+    /* Mutter ignore une demande de placement venant d'une fenêtre dont la dernière
+       « activité » est plus ancienne que celle de la fenêtre active : on la date de maintenant */
+    unsigned long t = heure;
+    XChangeProperty(dpy, w, XInternAtom(dpy, "_NET_WM_USER_TIME", False), XA_CARDINAL, 32, PropModeReplace,
+                    (unsigned char *)&t, 1);
+    XWindowChanges changement;
+    changement.stack_mode = Below; /* tout en bas de la couche « bureau » */
+    XReconfigureWMWindow(dpy, w, DefaultScreen(dpy), CWStackMode, &changement);
+    XFlush(dpy);
+}
+
 static int creer_fond(Display *dpy, int x, int y, int l, int h)
 {
     int ecran = DefaultScreen(dpy);
@@ -253,6 +318,12 @@ static int creer_fond(Display *dpy, int x, int y, int l, int h)
     unsigned long tous = 0xFFFFFFFF;
     XChangeProperty(dpy, w, XInternAtom(dpy, "_NET_WM_DESKTOP", False), XA_CARDINAL, 32,
                     PropModeReplace, (unsigned char *)&tous, 1);
+
+    /* 2 = ne jamais court-circuiter le compositeur : sinon une fenêtre plein écran
+       peut s'afficher par-dessus tout, barre du haut comprise */
+    unsigned long jamais = 2;
+    XChangeProperty(dpy, w, XInternAtom(dpy, "_NET_WM_BYPASS_COMPOSITOR", False), XA_CARDINAL, 32,
+                    PropModeReplace, (unsigned char *)&jamais, 1);
 
     XClassHint classe = {"fond-vivant", "FondVivant"};
     XSetClassHint(dpy, w, &classe);
@@ -278,12 +349,19 @@ static int creer_fond(Display *dpy, int x, int y, int l, int h)
     printf("WID %lu\n", (unsigned long)w);
     fflush(stdout);
 
+    /* rester sous les icônes du bureau, même quand elles sont recréées */
+    Atom pile = XInternAtom(dpy, "_NET_CLIENT_LIST_STACKING", False);
+    passer_sous_les_icones(dpy, w, heure_serveur(dpy, w));
+    XSelectInput(dpy, DefaultRootWindow(dpy), PropertyChangeMask);
+
     int fd_x = ConnectionNumber(dpy);
     char ligne[128];
     for (;;) {
         while (XPending(dpy)) {
             XEvent ev;
             XNextEvent(dpy, &ev);
+            if (ev.type == PropertyNotify && ev.xproperty.atom == pile)
+                passer_sous_les_icones(dpy, w, ev.xproperty.time);
         }
         fd_set lecture;
         FD_ZERO(&lecture);

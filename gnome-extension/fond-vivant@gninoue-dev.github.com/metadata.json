@@ -1,0 +1,8 @@
+{
+    "uuid": "fond-vivant@gninoue-dev.github.com",
+    "name": "Fond Vivant",
+    "description": "Affiche le fond animé de Fond Vivant dans la couche du fond d'écran de GNOME, sous les icônes du bureau.",
+    "shell-version": ["45", "46", "47", "48"],
+    "url": "https://github.com/gninoue-dev/fond-vivant",
+    "version": 1
+}

@@ -8,8 +8,7 @@ import os
 import sys
 import tempfile
 
-from PySide6.QtCore import QObject, QProcess, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import config as cfg
@@ -36,7 +35,10 @@ def lister_ecrans() -> list[tuple[int, int, int, int, float]]:
                     pass
             if ecrans:
                 return ecrans
-    # repli : ce que Qt sait des écrans
+    # repli : ce que Qt sait des écrans (seulement dans la fenêtre de réglage)
+    from PySide6.QtGui import QGuiApplication
+    if not isinstance(QCoreApplication.instance(), QGuiApplication):
+        return []
     ecrans = []
     principal = QGuiApplication.primaryScreen()
     for s in sorted(QGuiApplication.screens(), key=lambda s: s is not principal):
@@ -198,8 +200,10 @@ class Lecteur(QObject):
 
         self.a_recreer = QTimer(self, singleShot=True, interval=1500)
         self.a_recreer.timeout.connect(self.recreer)
-        for signal in (app.screenAdded, app.screenRemoved):
-            signal.connect(lambda *_: self.a_recreer.start())
+        # écran branché, débranché ou changement de résolution
+        self.geometries = []
+        self.surveillance = QTimer(self, interval=3000)
+        self.surveillance.timeout.connect(self._verifier_ecrans)
 
     def demarrer(self) -> bool:
         if not trouver_outil("mpv"):
@@ -220,12 +224,20 @@ class Lecteur(QObject):
                 journal("impossible d'ouvrir le canal de commande :", self.serveur.errorString())
                 return False
         self.recreer()
+        self.surveillance.start()
         return True
+
+    def _verifier_ecrans(self):
+        ecrans = lister_ecrans()
+        if ecrans and [e[:4] for e in ecrans] != [g[:4] for g in self.geometries]:
+            journal("les écrans ont changé")
+            self.a_recreer.start()
 
     def recreer(self):
         for e in self.ecrans:
             e.arreter()
-        self.ecrans = [Ecran(self, i, g, self.a_recreer.start) for i, g in enumerate(lister_ecrans())]
+        self.geometries = lister_ecrans()
+        self.ecrans = [Ecran(self, i, g, self.a_recreer.start) for i, g in enumerate(self.geometries)]
         for e in self.ecrans:
             e.demarrer()
         journal(f"{len(self.ecrans)} écran(s) :",
@@ -238,6 +250,7 @@ class Lecteur(QObject):
 
     def arreter(self):
         self.a_recreer.stop()
+        self.surveillance.stop()
         for e in self.ecrans:
             e.arreter()
         self.ecrans = []
@@ -264,8 +277,7 @@ class Lecteur(QObject):
 
 
 def principal() -> int:
-    app = QGuiApplication(sys.argv[:1])
-    app.setQuitOnLastWindowClosed(False)
+    app = QCoreApplication(sys.argv[:1])
     lecteur = Lecteur(app)
     if not lecteur.demarrer():
         return 1
