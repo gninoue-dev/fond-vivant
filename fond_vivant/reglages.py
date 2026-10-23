@@ -165,7 +165,14 @@ class FenetreReglages(QMainWindow):
         titres.addWidget(QLabel("Fond Vivant", objectName="titre"))
         self.etat = QLabel()
         titres.addWidget(self.etat)
+        titres.addWidget(QLabel("Tu peux fermer cette fenêtre : le fond continue en arrière-plan.", objectName="aide"))
         ligne.addLayout(titres, 1)
+        self.autostart = QCheckBox("Démarrer avec l'ordinateur", checked=autostart_actif())
+        self.autostart.setToolTip("Ton fond animé ou ton diaporama se lance tout seul quand tu allumes "
+                                  "l'ordinateur, sans ouvrir cette fenêtre.")
+        self.autostart.toggled.connect(self._autostart_modifie)
+        ligne.addWidget(self.autostart)
+        ligne.addSpacing(12)
         self.bouton_pause = QPushButton()
         self.bouton_pause.clicked.connect(self._basculer_pause)
         ligne.addWidget(self.bouton_pause)
@@ -271,10 +278,6 @@ class FenetreReglages(QMainWindow):
         self.fluidite = QCheckBox("Lecture ultra fluide (calée sur ton écran)", checked=self.config["fluidite"])
         self.fluidite.toggled.connect(self._reglage_modifie)
         ligne.addWidget(self.fluidite)
-        ligne.addSpacing(20)
-        self.autostart = QCheckBox("Démarrer avec l'ordinateur", checked=autostart_actif())
-        self.autostart.toggled.connect(regler_autostart)
-        ligne.addWidget(self.autostart)
         ligne.addStretch(1)
         o.addLayout(ligne)
         o.addWidget(QLabel("Astuce : clic droit sur une vidéo → « Rendre plus fluide (60 i/s) » pour la préparer "
@@ -506,7 +509,19 @@ class FenetreReglages(QMainWindow):
         cfg.ecrire(self.config)
         canal.envoyer("recharger")
 
+    def _autostart_modifie(self, actif):
+        regler_autostart(actif)
+        self.config["autostart_choisi"] = True  # l'utilisateur a décidé : on ne touche plus à son choix
+        cfg.ecrire(self.config)
+
     def _enregistrer_et_lancer(self):
+        if cfg.fichiers_a_jouer(self.config) and not self.config.get("autostart_choisi"):
+            # premier fond choisi : il reviendra tout seul au prochain démarrage
+            self.config["autostart_choisi"] = True
+            regler_autostart(True)
+            self.autostart.blockSignals(True)
+            self.autostart.setChecked(True)
+            self.autostart.blockSignals(False)
         cfg.ecrire(self.config)
         if not cfg.fichiers_a_jouer(self.config):
             canal.envoyer("recharger")
