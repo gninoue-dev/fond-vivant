@@ -24,7 +24,7 @@ Gestionnaire de fonds d'écran animés (vidéos) et de photos pour **Linux** et 
 ## Installation sous Linux (depuis les sources)
 
 ```bash
-sudo apt install mpv ffmpeg libx11-dev libxext-dev libxrandr-dev
+sudo apt install mpv ffmpeg libxcb-cursor0 libx11-dev libxext-dev libxrandr-dev
 make -C natif                    # compile outils/fv-bureau
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python lancer.py
