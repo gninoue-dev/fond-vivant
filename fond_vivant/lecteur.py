@@ -5,6 +5,7 @@ de l'écran (display-resample) et interpolation entre les images pour un rendu f
 """
 import json
 import os
+import random
 import sys
 import tempfile
 
@@ -12,7 +13,7 @@ from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import config as cfg
-from .systeme import NOM_SERVEUR, WINDOWS, trouver_outil
+from .systeme import NOM_SERVEUR, WINDOWS, dossier_cache, trouver_outil
 
 
 def journal(*texte):
@@ -110,8 +111,6 @@ class Ecran(QObject):
             self._lancer_mpv(ligne[4:])
 
     def _lancer_mpv(self, wid):
-        config = cfg.lire()
-        self.fichier = cfg.fichier_a_jouer(config)
         options = {
             "wid": wid,
             "config": False,                 # ignore le mpv.conf de l'utilisateur
@@ -119,8 +118,6 @@ class Ecran(QObject):
             "idle": True,
             "force-window": True,
             "keep-open": True,
-            "loop-file": "inf",
-            "image-display-duration": "inf",
             "hwdec": "auto-safe",            # décodage par la carte graphique
             "vo": "gpu",
             "tscale": "oversample",          # interpolation nette, sans flou
@@ -136,11 +133,8 @@ class Ecran(QObject):
             "sub-auto": "no",
             "terminal": False,
             "input-ipc-server": self.chemin_ipc,
-            **proprietes(config, avec_son=self.numero == 0),
         }
         arguments = [f"--{cle}={en_argument(v)}" for cle, v in options.items()]
-        if self.fichier and os.path.isfile(self.fichier):
-            arguments.append(self.fichier)
         self.mpv.start(trouver_outil("mpv"), arguments)
         QTimer.singleShot(300, self._connecter_ipc)
 
@@ -148,7 +142,9 @@ class Ecran(QObject):
         if self.mpv.state() == QProcess.ProcessState.NotRunning:
             return
         self.ipc.connectToServer(self.nom_ipc)
-        if not self.ipc.waitForConnected(200) and essai < 30:
+        if self.ipc.waitForConnected(200):
+            self.appliquer(cfg.lire())
+        elif essai < 30:
             QTimer.singleShot(200, lambda: self._connecter_ipc(essai + 1))
 
     def commande(self, *arguments):
@@ -157,15 +153,34 @@ class Ecran(QObject):
             self.ipc.flush()
 
     def appliquer(self, config):
-        fichier = cfg.fichier_a_jouer(config)
-        if fichier != self.fichier:
-            self.fichier = fichier
-            if fichier and os.path.isfile(fichier):
-                self.commande("loadfile", fichier, "replace")
-            else:
-                self.commande("stop")
-        for nom, valeur in proprietes(config, avec_son=self.numero == 0).items():
+        fichiers = cfg.fichiers_a_jouer(config)
+        diaporama = config.get("mode") == "diaporama"
+        intervalle = max(5, int(config.get("intervalle", 600)))
+        reglages = proprietes(config, avec_son=self.numero == 0)
+        if diaporama:
+            # chaque photo reste affichée « intervalle » secondes ; une vidéo passe une fois
+            reglages.update({"image-display-duration": intervalle, "loop-file": "no", "loop-playlist": "inf"})
+        else:
+            reglages.update({"image-display-duration": "inf", "loop-file": "inf", "loop-playlist": "no"})
+        for nom, valeur in reglages.items():
             self.commande("set_property", nom, valeur)
+
+        cle = (tuple(fichiers), diaporama, intervalle, bool(config.get("aleatoire")))
+        if cle == self.fichier:
+            return
+        self.fichier = cle
+        if not fichiers:
+            self.commande("stop")
+        elif diaporama:
+            ordre = list(fichiers)
+            if config.get("aleatoire"):
+                random.shuffle(ordre)  # un ordre différent sur chaque écran
+            liste = dossier_cache() / f"diaporama-{self.numero}.m3u"
+            liste.parent.mkdir(parents=True, exist_ok=True)
+            liste.write_text("\n".join(ordre) + "\n", encoding="utf-8")
+            self.commande("loadlist", str(liste), "replace")
+        else:
+            self.commande("loadfile", fichiers[0], "replace")
 
     def arreter(self):
         self.arret_volontaire = True
@@ -271,6 +286,10 @@ class Lecteur(QObject):
                 socket.write(b"ok\n")
                 socket.flush()
                 QTimer.singleShot(0, self.arreter)
+            elif commande == "suivant":
+                for e in self.ecrans:
+                    e.commande("playlist-next", "force")
+                socket.write(b"ok\n")
             elif commande == "etat":
                 socket.write(f"actif {len(self.ecrans)}\n".encode())
             socket.flush()

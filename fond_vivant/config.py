@@ -14,7 +14,11 @@ CADRAGES = {
 
 DEFAUT = {
     "bibliotheque": [],      # [{"chemin": ..., "type": "video"|"image", "optimise": chemin ou ""}]
-    "actuel": "",            # chemin d'origine du fond affiché
+    "mode": "unique",        # "unique" : un seul fond ; "diaporama" : les images changent
+    "actuel": "",            # chemin d'origine du fond affiché en mode unique
+    "diaporama": [],         # chemins d'origine choisis pour le diaporama
+    "intervalle": 600,       # secondes entre deux images du diaporama
+    "aleatoire": True,
     "cadrage": "remplir",
     "fluidite": True,        # interpolation de mpv calée sur la fréquence de l'écran
     "son": False,
@@ -48,9 +52,18 @@ def entree(config: dict, chemin: str) -> dict | None:
     return None
 
 
-def fichier_a_jouer(config: dict) -> str:
-    """Le fichier réellement lu : la version optimisée si elle existe encore."""
-    e = entree(config, config["actuel"])
+def version_a_lire(config: dict, chemin: str) -> str:
+    """La version optimisée si elle existe encore, sinon l'original."""
+    e = entree(config, chemin)
     if e and e.get("optimise") and os.path.isfile(e["optimise"]):
         return e["optimise"]
-    return config["actuel"]
+    return chemin
+
+
+def fichiers_a_jouer(config: dict) -> list[str]:
+    """Les fichiers que le lecteur doit afficher, selon le mode."""
+    if config.get("mode") == "diaporama":
+        chemins = [c for c in config.get("diaporama", []) if entree(config, c)]
+    else:
+        chemins = [config["actuel"]] if config["actuel"] else []
+    return [version_a_lire(config, c) for c in chemins if os.path.isfile(c)]
