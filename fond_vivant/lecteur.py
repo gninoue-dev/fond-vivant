@@ -4,6 +4,7 @@ mpv fait tout le travail d'image : décodage matériel, cadence calée sur la fr
 de l'écran (display-resample) et interpolation entre les images pour un rendu fluide.
 """
 import json
+import math
 import os
 import random
 import sys
@@ -13,7 +14,7 @@ from PySide6.QtCore import QCoreApplication, QObject, QProcess, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import config as cfg
-from .systeme import NOM_SERVEUR, WINDOWS, dossier_cache, trouver_outil
+from .systeme import NOM_SERVEUR, WINDOWS, trouver_outil
 
 
 def journal(*texte):
@@ -61,6 +62,27 @@ def proprietes(config: dict, avec_son: bool) -> dict:
         "mute": not (avec_son and config.get("son")),
         "volume": int(config.get("volume", 50)),
         "pause": bool(config.get("pause")),
+    }
+
+
+def options_fichier(fichier: str, entree: dict, cadrage: str, largeur_ecran: int, hauteur_ecran: int) -> dict:
+    """Zoom et décalage mpv qui reproduisent le recadrage choisi par l'utilisateur.
+
+    Avec panscan=1, mpv agrandit l'image juste assez pour remplir l'écran (s0).
+    video-zoom (en puissance de 2) agrandit encore jusqu'à la taille du cadre, et
+    video-pan-x/y (en fraction de l'image) amène le centre du cadre au centre de l'écran.
+    Une version optimisée est déjà recadrée par ffmpeg : rien à faire.
+    """
+    neutre = {"video-zoom": "0", "video-pan-x": "0", "video-pan-y": "0"}
+    r = (entree or {}).get("recadrage")
+    if not r or cadrage != "remplir" or fichier != entree["chemin"]:
+        return neutre
+    s0 = max(largeur_ecran / r["largeur"], hauteur_ecran / r["hauteur"])
+    zoom = math.log2(largeur_ecran / (r["l"] * r["largeur"] * s0))
+    return {
+        "video-zoom": f"{max(0.0, zoom):.5f}",
+        "video-pan-x": f"{0.5 - (r['x'] + r['l'] / 2):.5f}",
+        "video-pan-y": f"{0.5 - (r['y'] + r['h'] / 2):.5f}",
     }
 
 
@@ -153,7 +175,6 @@ class Ecran(QObject):
             self.ipc.flush()
 
     def appliquer(self, config):
-        fichiers = cfg.fichiers_a_jouer(config)
         diaporama = config.get("mode") == "diaporama"
         intervalle = max(5, int(config.get("intervalle", 600)))
         reglages = proprietes(config, avec_son=self.numero == 0)
@@ -164,23 +185,32 @@ class Ecran(QObject):
             reglages.update({"image-display-duration": "inf", "loop-file": "inf", "loop-playlist": "no"})
         for nom, valeur in reglages.items():
             self.commande("set_property", nom, valeur)
+        # zones transparentes des PNG en noir plutôt qu'en damier ; le nom de l'option a changé
+        # entre mpv 0.37 (alpha=blend) et 0.38 (background=color) : chaque version ignore l'autre
+        self.commande("set_property", "alpha", "blend")
+        self.commande("set_property", "background", "color")
 
-        cle = (tuple(fichiers), diaporama, intervalle, bool(config.get("aleatoire")))
+        cadrage = config.get("cadrage", "remplir")
+        elements = [(fichier, options_fichier(fichier, entree, cadrage, self.largeur, self.hauteur))
+                    for fichier, entree in cfg.elements_a_jouer(config)]
+        cle = (json.dumps(elements), diaporama, intervalle, bool(config.get("aleatoire")))
         if cle == self.fichier:
             return
         self.fichier = cle
-        if not fichiers:
+        if not elements:
             self.commande("stop")
-        elif diaporama:
-            ordre = list(fichiers)
-            if config.get("aleatoire"):
-                random.shuffle(ordre)  # un ordre différent sur chaque écran
-            liste = dossier_cache() / f"diaporama-{self.numero}.m3u"
-            liste.parent.mkdir(parents=True, exist_ok=True)
-            liste.write_text("\n".join(ordre) + "\n", encoding="utf-8")
-            self.commande("loadlist", str(liste), "replace")
-        else:
-            self.commande("loadfile", fichiers[0], "replace")
+            return
+        if diaporama and config.get("aleatoire"):
+            random.shuffle(elements)  # un ordre différent sur chaque écran
+        # chaque fichier garde son propre recadrage (options « par fichier » de mpv)
+        for i, (fichier, options) in enumerate(elements):
+            self.commande_nommee({"name": "loadfile", "url": fichier,
+                                  "flags": "replace" if i == 0 else "append", "options": options})
+
+    def commande_nommee(self, commande: dict):
+        if self.ipc.state() == QLocalSocket.LocalSocketState.ConnectedState:
+            self.ipc.write((json.dumps({"command": commande}) + "\n").encode())
+            self.ipc.flush()
 
     def arreter(self):
         self.arret_volontaire = True

@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QImageReader, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFrame,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QMessageBox, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget)
@@ -14,6 +14,7 @@ from . import __version__, canal
 from . import config as cfg
 from .lecteur import lister_ecrans
 from .optimiseur import Optimisation, miniature, sonder
+from .recadrage import DialogueRecadrage, meme_format, nom_format
 from .systeme import (EXTENSIONS_IMAGE, EXTENSIONS_VIDEO, WINDOWS, autostart_actif, commande_application,
                       lancer_detache, regler_autostart, trouver_outil, type_fichier)
 
@@ -21,6 +22,7 @@ TAILLE_ICONE = QSize(220, 124)
 AJOUTER = "__ajouter__"
 ROLE_CHEMIN = Qt.ItemDataRole.UserRole
 ROLE_IMAGE = Qt.ItemDataRole.UserRole + 1
+ROLE_TAILLE = Qt.ItemDataRole.UserRole + 2
 
 INTERVALLES = [(15, "15 secondes"), (30, "30 secondes"), (60, "1 minute"), (300, "5 minutes"), (600, "10 minutes"),
                (900, "15 minutes"), (1800, "30 minutes"), (3600, "1 heure"), (10800, "3 heures"),
@@ -81,7 +83,7 @@ def palette_sombre(app):
 
 class Messager(QObject):
     """Ramène les miniatures fabriquées en arrière-plan dans le fil de l'interface."""
-    miniature_prete = Signal(str, str)
+    miniature_prete = Signal(str, str, int, int)
 
 
 class Grille(QListWidget):
@@ -127,6 +129,8 @@ class FenetreReglages(QMainWindow):
         self.setWindowTitle("Fond Vivant")
         self.resize(1040, 720)
         self.config = cfg.lire()
+        ecrans = lister_ecrans()
+        self.ecran = (ecrans[0][2], ecrans[0][3]) if ecrans else (1920, 1080)
         self.optimisation = None
         self.travail = ThreadPoolExecutor(max_workers=2)
         self.messager = Messager()
@@ -323,14 +327,26 @@ class FenetreReglages(QMainWindow):
 
     def _fabriquer_miniature(self, chemin):
         image = miniature(chemin)
-        self.messager.miniature_prete.emit(chemin, str(image) if image else "")
+        largeur, hauteur = self._taille_source(chemin)
+        self.messager.miniature_prete.emit(chemin, str(image) if image else "", largeur, hauteur)
 
-    def _miniature_prete(self, chemin, image):
+    def _taille_source(self, chemin):
+        if type_fichier(chemin) == "image":
+            taille = QImageReader(chemin).size()
+            if taille.isValid():
+                return taille.width(), taille.height()
+        infos = sonder(chemin)
+        return infos["largeur"], infos["hauteur"]
+
+    def _miniature_prete(self, chemin, image, largeur, hauteur):
         element = self._element(chemin)
+        if not element:
+            return
+        element.setData(ROLE_TAILLE, (largeur, hauteur))
         pixmap = QPixmap(image) if image else QPixmap(chemin)
-        if element and not pixmap.isNull():
+        if not pixmap.isNull():
             element.setData(ROLE_IMAGE, pixmap)
-            self._maj_element(element)
+        self._maj_element(element)
 
     def _maj_element(self, element):
         """Vignette, coche et cadre « actuel » selon le mode."""
@@ -347,16 +363,21 @@ class FenetreReglages(QMainWindow):
             element.setFlags(Qt.ItemFlag.ItemIsEnabled)
             element.setData(Qt.ItemDataRole.CheckStateRole, None)
         actuel = (not diapo and chemin == self.config["actuel"]) or (diapo and chemin in self.config["diaporama"])
-        element.setIcon(QIcon(self._vignette(element.data(ROLE_IMAGE), chemin, actuel)))
+        element.setIcon(QIcon(self._vignette(element.data(ROLE_IMAGE), chemin, actuel, element.data(ROLE_TAILLE))))
         self.grille.blockSignals(False)
 
-    def _vignette(self, pixmap, chemin, actuel=False):
+    def _vignette(self, pixmap, chemin, actuel=False, taille_source=None):
         taille = TAILLE_ICONE
         rendu = QPixmap(taille)
         rendu.fill(Qt.GlobalColor.transparent)
         peintre = QPainter(rendu)
         peintre.setRenderHint(QPainter.RenderHint.Antialiasing)
         peintre.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        r = (cfg.entree(self.config, chemin) or {}).get("recadrage")
+        if pixmap and not pixmap.isNull() and r:
+            # la vignette montre exactement la partie choisie
+            pixmap = pixmap.copy(round(r["x"] * pixmap.width()), round(r["y"] * pixmap.height()),
+                                 round(r["l"] * pixmap.width()), round(r["h"] * pixmap.height()))
         if pixmap and not pixmap.isNull():
             image = pixmap.scaled(taille, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                   Qt.TransformationMode.SmoothTransformation)
@@ -374,6 +395,10 @@ class FenetreReglages(QMainWindow):
             badges.append(("▶ VIDÉO", QColor(0, 0, 0, 170)))
         if e and e.get("optimise") and os.path.isfile(e["optimise"]):
             badges.append(("60 i/s", QColor(124, 92, 255, 230)))
+        if e and e.get("recadrage"):
+            badges.append(("RECADRÉE", QColor(40, 140, 90, 230)))
+        elif taille_source and taille_source[0] and not meme_format(*taille_source, *self.ecran):
+            badges.append(("FORMAT ≠ ÉCRAN", QColor(170, 110, 20, 230)))
         police = peintre.font()
         police.setPointSize(7)
         police.setBold(True)
@@ -492,8 +517,10 @@ class FenetreReglages(QMainWindow):
             texte = (f"{n} image{'s' if n > 1 else ''} dans le diaporama. Clique sur une image pour l'ajouter "
                      "ou la retirer." if n else "Coche au moins une image pour lancer le diaporama.")
         else:
-            texte = "Un seul clic suffit : le fond change tout de suite. Clic droit pour plus de choix."
-        self.aide_choix.setText(texte)
+            texte = "Un seul clic suffit : le fond change tout de suite. Clic droit → « Recadrer » pour choisir la partie affichée."
+        largeur, hauteur = self.ecran
+        self.aide_choix.setText(f"{texte}\nConseil : ton écran fait {largeur} × {hauteur} ({nom_format(largeur, hauteur)}). "
+                                "Des images de cette taille ou plus grandes, au même format, s'affichent parfaitement.")
 
     def _diapo_modifie(self, *_):
         self.config["intervalle"] = self.intervalle.currentData()
@@ -614,6 +641,7 @@ class FenetreReglages(QMainWindow):
         menu = QMenu(self)
         if self.config["mode"] == "unique":
             menu.addAction("Mettre en fond d'écran", lambda: self._clic(element))
+        menu.addAction("✂  Recadrer pour mon écran…", lambda: self._recadrer(chemin))
         if e["type"] == "video":
             action = QAction("Rendre plus fluide (60 i/s, taille de mon écran)", menu)
             action.setEnabled(self.optimisation is None)
@@ -636,6 +664,44 @@ class FenetreReglages(QMainWindow):
             lignes.append(f"Version fluide prête : {o['largeur']} × {o['hauteur']} à {o['fps']:.0f} i/s")
         QMessageBox.information(self, Path(e["chemin"]).name, "\n".join(lignes))
 
+    def _recadrer(self, chemin):
+        e = cfg.entree(self.config, chemin)
+        element = self._element(chemin)
+        largeur, hauteur = (element.data(ROLE_TAILLE) if element and element.data(ROLE_TAILLE)
+                            else self._taille_source(chemin))
+        if e["type"] == "image":
+            apercu = QPixmap(chemin)
+            if apercu.width() > 1600:
+                apercu = apercu.scaledToWidth(1600, Qt.TransformationMode.SmoothTransformation)
+        else:
+            image = miniature(chemin, 1280)
+            apercu = QPixmap(str(image)) if image else QPixmap()
+        if apercu.isNull() or not largeur:
+            QMessageBox.warning(self, "Recadrage impossible", "Impossible de lire ce fichier.")
+            return
+        dialogue = DialogueRecadrage(self, Path(chemin).name, apercu, largeur, hauteur, *self.ecran,
+                                     e.get("recadrage"))
+        if not dialogue.exec():
+            return
+        nouveau = dialogue.resultat()
+        if nouveau == (e.get("recadrage") or {}):
+            return
+        if nouveau:
+            e["recadrage"] = nouveau
+        else:
+            e.pop("recadrage", None)
+        if e.get("optimise"):
+            # la version fluide avait l'ancien cadrage : il faudra la refaire
+            Path(e["optimise"]).unlink(missing_ok=True)
+            e["optimise"] = ""
+            QMessageBox.information(self, "Cadrage enregistré",
+                                    "La version fluide (60 i/s) de cette vidéo utilisait l'ancien cadrage : "
+                                    "je l'ai supprimée. Clic droit → « Rendre plus fluide » pour la refaire.")
+        cfg.ecrire(self.config)
+        if element:
+            self._maj_element(element)
+        canal.envoyer("recharger")
+
     def _retirer(self, chemin):
         e = cfg.entree(self.config, chemin)
         if e.get("optimise"):
@@ -656,7 +722,8 @@ class FenetreReglages(QMainWindow):
         ecrans = lister_ecrans()
         _x, _y, largeur, hauteur, hz = max(ecrans, key=lambda e: e[2] * e[3]) if ecrans else (0, 0, 1920, 1080, 60)
         fps = max(24, round(hz))
-        self.optimisation = Optimisation(chemin, largeur, hauteur, fps, True, self)
+        self.optimisation = Optimisation(chemin, largeur, hauteur, fps, True,
+                                         recadrage=cfg.entree(self.config, chemin).get("recadrage"), parent=self)
         self.optimisation.progression.connect(lambda p: self.barre.setValue(int(p * 1000)))
         self.optimisation.terminee.connect(lambda ok, r: self._optimisation_finie(chemin, ok, r))
         self.texte_progression.setText(f"Préparation de « {Path(chemin).name} » en {largeur}×{hauteur} à {fps} i/s…")

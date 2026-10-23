@@ -60,10 +60,15 @@ def version_a_lire(config: dict, chemin: str) -> str:
     return chemin
 
 
-def fichiers_a_jouer(config: dict) -> list[str]:
-    """Les fichiers que le lecteur doit afficher, selon le mode."""
+def elements_a_jouer(config: dict) -> list[tuple[str, dict]]:
+    """(fichier réellement lu, entrée de la bibliothèque) pour chaque fond à afficher."""
     if config.get("mode") == "diaporama":
-        chemins = [c for c in config.get("diaporama", []) if entree(config, c)]
+        chemins = config.get("diaporama", [])
     else:
         chemins = [config["actuel"]] if config["actuel"] else []
-    return [version_a_lire(config, c) for c in chemins if os.path.isfile(c)]
+    return [(version_a_lire(config, c), entree(config, c)) for c in chemins
+            if entree(config, c) and os.path.isfile(c)]
+
+
+def fichiers_a_jouer(config: dict) -> list[str]:
+    return [fichier for fichier, _ in elements_a_jouer(config)]

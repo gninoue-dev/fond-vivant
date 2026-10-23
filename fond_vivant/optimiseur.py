@@ -49,14 +49,22 @@ def _empreinte(chemin: str) -> str:
     return hashlib.sha1(f"{os.path.abspath(chemin)}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()[:12]
 
 
-def chemin_optimise(source: str, largeur: int, hauteur: int, fps: int, interpolation: bool) -> Path:
+def chemin_optimise(source: str, largeur: int, hauteur: int, fps: int, interpolation: bool,
+                    recadrage: dict | None = None) -> Path:
     suffixe = "_mi" if interpolation else ""
+    if recadrage:
+        suffixe += "_" + hashlib.sha1(json.dumps(recadrage, sort_keys=True).encode()).hexdigest()[:6]
     return dossier_cache() / "optimisees" / f"{Path(source).stem[:40]}_{_empreinte(source)}_{largeur}x{hauteur}_{fps}{suffixe}.mp4"
 
 
-def commande_ffmpeg(source, sortie, largeur, hauteur, fps, interpolation, infos) -> list[str]:
+def commande_ffmpeg(source, sortie, largeur, hauteur, fps, interpolation, infos, recadrage=None) -> list[str]:
     largeur, hauteur = largeur - largeur % 2, hauteur - hauteur % 2  # exigé par le H.264 en 4:2:0
-    filtres = [
+    filtres = []
+    if recadrage:
+        # la zone choisie par l'utilisateur, en fractions de l'image d'origine
+        r = recadrage
+        filtres.append(f"crop=iw*{r['l']}:ih*{r['h']}:iw*{r['x']}:ih*{r['y']}")
+    filtres += [
         f"scale={largeur}:{hauteur}:force_original_aspect_ratio=increase:flags=lanczos",
         f"crop={largeur}:{hauteur}",
         "setsar=1",
@@ -84,13 +92,14 @@ class Optimisation(QObject):
     progression = Signal(float)
     terminee = Signal(bool, str)  # réussite, chemin de sortie ou message d'erreur
 
-    def __init__(self, source, largeur, hauteur, fps, interpolation, parent=None):
+    def __init__(self, source, largeur, hauteur, fps, interpolation, recadrage=None, parent=None):
         super().__init__(parent)
         self.source = source
         self.infos = sonder(source)
-        self.sortie = chemin_optimise(source, largeur, hauteur, fps, interpolation)
+        self.sortie = chemin_optimise(source, largeur, hauteur, fps, interpolation, recadrage)
         self.partiel = self.sortie.with_suffix(".partiel.mp4")
-        self.commande = commande_ffmpeg(source, self.partiel, largeur, hauteur, fps, interpolation, self.infos)
+        self.commande = commande_ffmpeg(source, self.partiel, largeur, hauteur, fps, interpolation, self.infos,
+                                        recadrage)
         self.processus = QProcess(self)
         self.processus.readyReadStandardOutput.connect(self._lire)
         self.processus.finished.connect(self._fin)
@@ -132,10 +141,10 @@ class Optimisation(QObject):
             self.terminee.emit(False, erreur.splitlines()[-1] if erreur else f"ffmpeg a échoué ({code})")
 
 
-def miniature(source: str) -> Path | None:
-    """Image d'aperçu (480 px de large), mise en cache."""
+def miniature(source: str, largeur: int = 480) -> Path | None:
+    """Image d'aperçu (480 px de large par défaut), mise en cache."""
     try:
-        cible = dossier_cache() / "miniatures" / f"{_empreinte(source)}.jpg"
+        cible = dossier_cache() / "miniatures" / f"{_empreinte(source)}_{largeur}.jpg"
     except OSError:
         return None
     if cible.is_file():
@@ -148,7 +157,7 @@ def miniature(source: str) -> Path | None:
     debut = ["-ss", f"{min(1.0, duree / 3):.2f}"] if duree > 0.5 else []
     try:
         subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", *debut, "-i", source, "-frames:v", "1",
-                        "-vf", "scale=480:-2", "-y", str(cible)], timeout=30, creationflags=SANS_CONSOLE)
+                        "-vf", f"scale='min({largeur},iw)':-2", "-y", str(cible)], timeout=30, creationflags=SANS_CONSOLE)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return cible if cible.is_file() else None
