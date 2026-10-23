@@ -1,0 +1,56 @@
+"""Configuration partagée entre la fenêtre de réglage et le lecteur."""
+import json
+import os
+
+from .systeme import dossier_config
+
+FICHIER = dossier_config() / "config.json"
+
+CADRAGES = {
+    "remplir": "Remplir l'écran (rogne les bords si besoin)",
+    "entier": "Afficher en entier (bandes noires)",
+    "etirer": "Étirer à la taille de l'écran (déforme)",
+}
+
+DEFAUT = {
+    "bibliotheque": [],      # [{"chemin": ..., "type": "video"|"image", "optimise": chemin ou ""}]
+    "actuel": "",            # chemin d'origine du fond affiché
+    "cadrage": "remplir",
+    "fluidite": True,        # interpolation de mpv calée sur la fréquence de l'écran
+    "son": False,
+    "volume": 50,
+    "pause": False,
+}
+
+
+def lire() -> dict:
+    config = json.loads(json.dumps(DEFAUT))
+    try:
+        with open(FICHIER, encoding="utf-8") as f:
+            config.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return config
+
+
+def ecrire(config: dict):
+    FICHIER.parent.mkdir(parents=True, exist_ok=True)
+    temporaire = FICHIER.with_suffix(".tmp")
+    with open(temporaire, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    os.replace(temporaire, FICHIER)  # le lecteur ne lit jamais un fichier à moitié écrit
+
+
+def entree(config: dict, chemin: str) -> dict | None:
+    for e in config["bibliotheque"]:
+        if e["chemin"] == chemin:
+            return e
+    return None
+
+
+def fichier_a_jouer(config: dict) -> str:
+    """Le fichier réellement lu : la version optimisée si elle existe encore."""
+    e = entree(config, config["actuel"])
+    if e and e.get("optimise") and os.path.isfile(e["optimise"]):
+        return e["optimise"]
+    return config["actuel"]
