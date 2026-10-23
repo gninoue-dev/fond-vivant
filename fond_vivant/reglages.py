@@ -40,12 +40,15 @@ QPushButton#principal { background: #7c5cff; border: none; color: white; font-we
 QPushButton#principal:hover { background: #8d71ff; }
 QPushButton#principal:disabled { background: #3a3360; color: #9a93c0; }
 QPushButton#danger { color: #ff8a8a; }
+QPushButton#danger:disabled { color: #5c5c70; }
 QComboBox { background: #262633; border: 1px solid #33334a; border-radius: 8px; padding: 6px 10px; }
 QProgressBar { background: #262633; border: none; border-radius: 4px; height: 8px; text-align: center; }
 QProgressBar::chunk { background: #7c5cff; border-radius: 4px; }
 QSlider::groove:horizontal { height: 4px; background: #33334a; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: #7c5cff; border-radius: 2px; }
 QSlider::handle:horizontal { background: white; width: 14px; margin: -5px 0; border-radius: 7px; }
+QSlider::sub-page:horizontal:disabled { background: #44445a; }
+QSlider::handle:horizontal:disabled { background: #6c6c80; }
 #bandeau { background: #3b2a12; color: #ffcf8a; border-radius: 8px; padding: 8px; }
 """
 
@@ -175,7 +178,7 @@ class FenetreReglages(QMainWindow):
         self.apercu = QLabel(objectName="apercu", alignment=Qt.AlignmentFlag.AlignCenter)
         self.apercu.setFixedSize(300, 169)
         v.addWidget(self.apercu)
-        self.nom = QLabel(wordWrap=True)
+        self.nom = QLabel()
         self.nom.setStyleSheet("font-weight: 600; font-size: 11pt;")
         v.addWidget(self.nom)
         self.infos = QLabel(objectName="sous-titre", wordWrap=True)
@@ -407,7 +410,8 @@ class FenetreReglages(QMainWindow):
             self.apercu.setPixmap(self._recadrer(pixmap, self.apercu.size()))
         else:
             self.apercu.clear()
-        self.nom.setText(Path(chemin).name)
+        self.nom.setText(self.nom.fontMetrics().elidedText(Path(chemin).name, Qt.TextElideMode.ElideMiddle, 300))
+        self.nom.setToolTip(chemin)
         self.infos.setText(self._description(e))
         self.bouton_appliquer.setText("Fond d'écran actuel ✓" if chemin == self.config["actuel"]
                                       and canal.lecteur_actif() else "Mettre en fond d'écran")
